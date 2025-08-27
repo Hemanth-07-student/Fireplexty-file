@@ -32,16 +32,20 @@ export async function POST(request: Request) {
     }
 
     // Use API key from request body if provided, otherwise fall back to environment variable
-    const firecrawlApiHost = process.env.FIRECRAWL_API_HOST || "https://api.firecrawl.dev"
+    const firecrawlApiHost = process.env.FIRECRAWL_API_URL || "https://api.firecrawl.dev"
+    const resolvedFirecrawlApiHost = firecrawlApiHost.startsWith('http') ? firecrawlApiHost : `http://${firecrawlApiHost}`
     // Skip API key check for localhost/127.0.0.1 hosts (does not account for self-hosting at another machine)
     const isFirecrawlLocalhost = firecrawlApiHost.includes('localhost') || firecrawlApiHost.includes('127.0.0.1')
-    const firecrawlApiKey = body.firecrawlApiKey || process.env.FIRECRAWL_API_KEY || 'fc-not-required-for-localhost'
+    const firecrawlApiKey = body.firecrawlApiKey || process.env.FIRECRAWL_API_KEY || 'fc-not-required-for-self-host'
     if (!isFirecrawlLocalhost && !firecrawlApiKey) {
       return NextResponse.json({ error: `Firecrawl API key required but not configured for ${firecrawlApiHost}` }, { status: 500 })
     }
 
     // AI Provider selection
     const aiProvider = process.env.AI_PROVIDER || 'groq'
+    let providerInstance: any
+    let llm: any
+    let followUpLlm: any
 
     if (aiProvider === 'ollama') {
       // https://ai-sdk.dev/providers/community-providers/ollama
@@ -49,22 +53,22 @@ export async function POST(request: Request) {
       const ollamaHost = process.env.OLLAMA_HOST || "http://localhost:11434"
       const resolveHost = ollamaHost.startsWith('http') ? ollamaHost : `http://${ollamaHost}`
       const resolveBaseURL = resolveHost.endsWith("/api") ? resolveHost : `${resolveHost}/api`
-      const ollamaInstance = createOllama({
+      const providerInstance = createOllama({
         baseURL: resolveBaseURL
       })
       console.log(`Ollama API URL: ${resolveBaseURL} / Model: ${ollamaModel}`)
-      const llm = ollamaInstance(ollamaModel)
+      llm = providerInstance(ollamaModel)
       console.log(llm)
-      const followUpLlm = ollamaInstance(ollamaModel)
+      followUpLlm = providerInstance(ollamaModel)
     } else {
       const groqApiKey = process.env.GROQ_API_KEY
       if (!groqApiKey) {
         return NextResponse.json({ error: 'Groq API key not configured' }, { status: 500 })
       }
-      const groq = createGroq({ apiKey: groqApiKey })
-      const groqModel = process.env.GROQ_MODEL || 'moonshotai/kimi-k2-instruct'
-      const llm = groq(groqModel)
-      const followUpLlm = groq(groqModel)
+      providerInstance = createGroq({ apiKey: groqApiKey })
+      groqModel = process.env.GROQ_MODEL || 'moonshotai/kimi-k2-instruct'
+      llm = groq(groqModel)
+      followUpLlm = groq(groqModel)
     }
 
     // Always perform a fresh search for each query to ensure relevant results
@@ -122,7 +126,8 @@ export async function POST(request: Request) {
           })
           
           // Make direct API call to Firecrawl v2 search endpoint
-          const searchResponse = await fetch(`${firecrawlApiHost}`/v2/search', {
+          console.log(`Requesting Firecrawl API at ${resolvedFirecrawlApiHost}`)
+          const searchResponse = await fetch(`${resolvedFirecrawlApiHost}/v2/search`, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${firecrawlApiKey}`,
@@ -154,7 +159,7 @@ export async function POST(request: Request) {
           const imagesData = searchData.images || []
           
           // Transform web sources metadata
-          const cleanWebResults = webResults.filter((item: WebResult) => {
+          const cleanWebResults = webResults.filter((item: any) => {
             try {
               if (item.metadata?.statusCode && item.metadata.statusCode > 400) {
                 console.warn(`Skipping web search result for URL: ${item.url} due to HTTP status code: ${item.metadata.statusCode}`);
