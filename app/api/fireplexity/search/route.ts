@@ -44,32 +44,29 @@ export async function POST(request: Request) {
     // AI Provider selection
     const aiProvider = process.env.AI_PROVIDER || 'groq'
     let providerInstance: any
-    let llm: any
-    let followUpLlm: any
+    let providerModel: string
 
     if (aiProvider === 'ollama') {
       // https://ai-sdk.dev/providers/community-providers/ollama
-      const ollamaModel = process.env.OLLAMA_MODEL
       const ollamaHost = process.env.OLLAMA_HOST || "http://localhost:11434"
-      const resolveHost = ollamaHost.startsWith('http') ? ollamaHost : `http://${ollamaHost}`
-      const resolveBaseURL = resolveHost.endsWith("/api") ? resolveHost : `${resolveHost}/api`
-      const providerInstance = createOllama({
-        baseURL: resolveBaseURL
-      })
-      console.log(`Ollama API URL: ${resolveBaseURL} / Model: ${ollamaModel}`)
-      llm = providerInstance(ollamaModel)
-      console.log(llm)
-      followUpLlm = providerInstance(ollamaModel)
+      const resolvedOllamaHost = ollamaHost.startsWith('http') ? ollamaHost : `http://${ollamaHost}`
+      const resolvedOllamaApiUrl = resolvedOllamaHost.endsWith("/api") ? resolvedOllamaHost : `${resolvedOllamaHost}/api`
+      providerInstance = createOllama({ baseURL: resolvedOllamaApiUrl })
+      providerModel = process.env.OLLAMA_MODEL
+      console.log(`Ollama API URL: ${resolvedOllamaApiUrl} / Model: ${providerModel}`)
     } else {
       const groqApiKey = process.env.GROQ_API_KEY
       if (!groqApiKey) {
         return NextResponse.json({ error: 'Groq API key not configured' }, { status: 500 })
       }
       providerInstance = createGroq({ apiKey: groqApiKey })
-      groqModel = process.env.GROQ_MODEL || 'moonshotai/kimi-k2-instruct'
-      llm = groq(groqModel)
-      followUpLlm = groq(groqModel)
+      providerModel = process.env.GROQ_MODEL || 'moonshotai/kimi-k2-instruct'
+      console.log(`Groq Model: ${providerModel}`)
     }
+
+    const llm = providerInstance(providerModel)
+    console.log(llm)
+    const followUpLlm = providerInstance(providerModel)
 
     // Always perform a fresh search for each query to ensure relevant results
     const isFollowUp = messages.length > 2
