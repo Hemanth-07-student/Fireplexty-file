@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     // AI Provider selection
     const aiProvider = process.env.AI_PROVIDER || 'groq'
     let providerInstance: any
-    let providerModel: string
+    let providerModel: string | undefined
 
     if (aiProvider === 'ollama') {
       // https://ai-sdk.dev/providers/community-providers/ollama
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
       const resolvedOllamaHost = ollamaHost.startsWith('http') ? ollamaHost : `http://${ollamaHost}`
       const resolvedOllamaApiUrl = resolvedOllamaHost.endsWith("/api") ? resolvedOllamaHost : `${resolvedOllamaHost}/api`
       providerInstance = createOllama({ baseURL: resolvedOllamaApiUrl })
-      providerModel = process.env.OLLAMA_MODEL
+      providerModel = process.env.OLLAMA_MODEL || 'qwen3:14b'
       console.log(`Ollama API URL: ${resolvedOllamaApiUrl} / Model: ${providerModel}`)
     } else {
       const groqApiKey = process.env.GROQ_API_KEY
