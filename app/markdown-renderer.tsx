@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useMemo, useCallback } from 'react'
-import Streamdown from 'streamdown'
+import { Streamdown } from 'streamdown'
 import { CitationTooltip } from './citation-tooltip-portal'
 import { SearchResult } from './types'
 
