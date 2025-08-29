@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createGroq } from '@ai-sdk/groq'
+import { createOllama } from 'ollama-ai-provider-v2'
 import { streamText, generateText, createUIMessageStream, createUIMessageStreamResponse, convertToModelMessages } from 'ai'
 import type { ModelMessage } from 'ai'
 import { detectCompanyTicker } from '@/lib/company-ticker-map'
@@ -31,21 +32,41 @@ export async function POST(request: Request) {
     }
 
     // Use API key from request body if provided, otherwise fall back to environment variable
-    const firecrawlApiKey = body.firecrawlApiKey || process.env.FIRECRAWL_API_KEY
-    const groqApiKey = process.env.GROQ_API_KEY
-    
-    if (!firecrawlApiKey) {
-      return NextResponse.json({ error: 'Firecrawl API key not configured' }, { status: 500 })
-    }
-    
-    if (!groqApiKey) {
-      return NextResponse.json({ error: 'Groq API key not configured' }, { status: 500 })
+    const firecrawlApiHost = process.env.FIRECRAWL_API_URL || "https://api.firecrawl.dev"
+    const resolvedFirecrawlApiHost = firecrawlApiHost.startsWith('http') ? firecrawlApiHost : `http://${firecrawlApiHost}`
+    // Skip API key check for localhost/127.0.0.1 hosts (does not account for self-hosting at another machine)
+    const isFirecrawlLocalhost = firecrawlApiHost.includes('localhost') || firecrawlApiHost.includes('127.0.0.1')
+    const firecrawlApiKey = body.firecrawlApiKey || process.env.FIRECRAWL_API_KEY || 'fc-not-required-for-self-host'
+    if (!isFirecrawlLocalhost && !firecrawlApiKey) {
+      return NextResponse.json({ error: `Firecrawl API key required but not configured for ${firecrawlApiHost}` }, { status: 500 })
     }
 
-    // Configure Groq with the OSS 120B model
-    const groq = createGroq({
-      apiKey: groqApiKey
-    })
+    // AI Provider selection
+    const aiProvider = process.env.AI_PROVIDER || 'groq'
+    let providerInstance: any
+    let providerModel: string | undefined
+
+    if (aiProvider === 'ollama') {
+      // https://ai-sdk.dev/providers/community-providers/ollama
+      const ollamaHost = process.env.OLLAMA_HOST || "http://localhost:11434"
+      const resolvedOllamaHost = ollamaHost.startsWith('http') ? ollamaHost : `http://${ollamaHost}`
+      const resolvedOllamaApiUrl = resolvedOllamaHost.endsWith("/api") ? resolvedOllamaHost : `${resolvedOllamaHost}/api`
+      providerInstance = createOllama({ baseURL: resolvedOllamaApiUrl })
+      providerModel = process.env.OLLAMA_MODEL || 'qwen3:14b'
+      console.log(`Ollama API URL: ${resolvedOllamaApiUrl} / Model: ${providerModel}`)
+    } else {
+      const groqApiKey = process.env.GROQ_API_KEY
+      if (!groqApiKey) {
+        return NextResponse.json({ error: 'Groq API key not configured' }, { status: 500 })
+      }
+      providerInstance = createGroq({ apiKey: groqApiKey })
+      providerModel = process.env.GROQ_MODEL || 'moonshotai/kimi-k2-instruct'
+      console.log(`Groq Model: ${providerModel}`)
+    }
+
+    const llm = providerInstance(providerModel)
+    console.log(llm)
+    const followUpLlm = providerInstance(providerModel)
 
     // Always perform a fresh search for each query to ensure relevant results
     const isFollowUp = messages.length > 2
@@ -102,7 +123,8 @@ export async function POST(request: Request) {
           })
           
           // Make direct API call to Firecrawl v2 search endpoint
-          const searchResponse = await fetch('https://api.firecrawl.dev/v2/search', {
+          console.log(`Requesting Firecrawl API at ${resolvedFirecrawlApiHost}`)
+          const searchResponse = await fetch(`${resolvedFirecrawlApiHost}/v2/search`, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${firecrawlApiKey}`,
@@ -134,6 +156,18 @@ export async function POST(request: Request) {
           const imagesData = searchData.images || []
           
           // Transform web sources metadata
+          const cleanWebResults = webResults.filter((item: any) => {
+            try {
+              if (item.metadata?.statusCode && item.metadata.statusCode > 400) {
+                console.warn(`Skipping web search result for URL: ${item.url} due to HTTP status code: ${item.metadata.statusCode}`);
+                return false; // Skip this item
+              }
+              return true; // Keep this item if no status code or status code <= 400
+            } catch (error) {
+              console.error(`Error checking status code for web search result URL: ${item.url}. Skipping item.`, error);
+              return false; // Skip on any error during metadata access
+            }
+          });
           sources = webResults.map((item: any) => {
             return {
               url: item.url,
@@ -169,7 +203,7 @@ export async function POST(request: Request) {
               url: item.url,
               title: item.title || 'Untitled',
               thumbnail: item.imageUrl,  // Direct API returns 'imageUrl' field
-              source: item.url ? new URL(item.url).hostname : undefined,
+              source: item.url ? new URL(item.url).hostname : undefined,  // new URL(item.url) can throw TypeError when status code 4xx 5xx
               width: item.imageWidth,
               height: item.imageHeight,
               position: item.position
@@ -284,7 +318,7 @@ export async function POST(request: Request) {
           
           // Stream the text generation using Groq's Kimi K2 Instruct model
           const result = streamText({
-            model: groq('moonshotai/kimi-k2-instruct'),
+            model: llm,
             messages: aiMessages,
             temperature: 0.7,
             maxRetries: 2
@@ -308,7 +342,7 @@ export async function POST(request: Request) {
             
           try {
             const followUpResponse = await generateText({
-              model: groq('moonshotai/kimi-k2-instruct'),
+              model: followUpLlm,
               messages: [
                 {
                   role: 'system',
@@ -343,7 +377,7 @@ export async function POST(request: Request) {
           }
           
         } catch (error) {
-          
+          console.error("Error in Firecrawl POST request:", error);
           // Handle specific error types
           const errorMessage = error instanceof Error ? error.message : 'Unknown error'
           const statusCode = error && typeof error === 'object' && 'statusCode' in error 
@@ -356,11 +390,11 @@ export async function POST(request: Request) {
           const errorResponses: Record<number, { error: string; suggestion?: string }> = {
             401: {
               error: 'Invalid API key',
-              suggestion: 'Please check your Firecrawl API key is correct.'
+              suggestion: 'Please check your Firecrawl API key is correct if not using self-hosted Firecrawl API host.'
             },
             402: {
               error: 'Insufficient credits',
-              suggestion: 'You\'ve run out of Firecrawl credits. Please upgrade your plan.'
+              suggestion: 'You\'ve run out of Firecrawl credits. Please upgrade your plan. You can also self-host Firecrawl API.'
             },
             429: {
               error: 'Rate limit exceeded',
@@ -393,6 +427,7 @@ export async function POST(request: Request) {
     return createUIMessageStreamResponse({ stream })
     
   } catch (error) {
+    console.error("Error in search POST request:", error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error'
     const errorStack = error instanceof Error ? error.stack : ''
     return NextResponse.json(
