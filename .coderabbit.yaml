@@ -1,0 +1,6 @@
+language: "en-US"
+reviews:
+  goals:
+      - Check code quality
+      - Spot bugs
+      - Suggest improvements
