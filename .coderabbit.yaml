@@ -1,0 +1,36 @@
+language: "en-US"
+
+tone_instructions: >
+  Be concise, constructive, and kind. Focus on correctness, clarity, and maintainability.
+  Avoid nitpicks unless they improve readability or prevent bugs.
+
+reviews:
+  goals:
+    - Check for bugs, logic errors, and missing edge cases
+    - Suggest performance or security improvements
+    - Ensure code is easy to read and maintain
+    - Verify tests cover important functionality
+  avoid:
+    - Overly pedantic style comments
+    - Personal opinions unrelated to the code
+
+scopes:
+  include_paths:
+    - "src/"
+    - "lib/"
+    - "tests/"
+  exclude_paths:
+    - "docs/"
+    - "examples/"
+
+tests:
+  expectations:
+    - Unit tests for new or changed logic
+    - Edge cases explicitly tested
+    - No skipped or focused tests in committed code
+
+security:
+  focus:
+    - Input validation
+    - Dependency vulnerabilities
+    - Common injection risks
